@@ -284,7 +284,7 @@ class MirroringLauncher:
         self.borderless_var = tk.BooleanVar(value=False)
         self.chk_borderless = ttk.Checkbutton(
             set_lf, 
-            text="테두리 없는 전체화면`n(Borderless Fullscreen)", 
+            text="테두리 없는 전체화면", 
             variable=self.borderless_var
         )
         self.chk_borderless.pack(anchor=tk.W, pady=(0, 10))
