@@ -142,6 +142,34 @@ def run_cmd(args):
         return "", str(e), -1
 
 # ----------------------------------------------------
+# Helper to identify real Wi-Fi private IP address ranges
+# ----------------------------------------------------
+def is_private_ip(ip):
+    if not ip or ip.startswith("127."):
+        return False
+    if ip.startswith("169.254."):
+        return False
+    # Filter common mobile carrier IP subnets like 192.0.0.x or 10.x.x.x (if it's not a home router)
+    # Home Wi-Fi usually uses 192.168.x.x, 172.16.x.x ~ 172.31.x.x, or 10.0.x.x/10.1.x.x subnets.
+    parts = list(map(int, ip.split('.')))
+    if len(parts) != 4:
+        return False
+    
+    # Class C (Most common home Wi-Fi routers)
+    if parts[0] == 192 and parts[1] == 168:
+        return True
+    # Class B (e.g. 172.30.x.x or 172.16.x.x)
+    if parts[0] == 172:
+        return True
+    # Class A (Usually 10.0.0.0 to 10.255.255.255)
+    # Allow Class A but exclude generic cellular if possible.
+    # Typically home network Class A router subnets are small like 10.0.0.x or 10.1.1.x
+    if parts[0] == 10:
+        return True
+        
+    return False
+
+# ----------------------------------------------------
 # Main Launcher GUI
 # ----------------------------------------------------
 class MirroringLauncher:
@@ -427,7 +455,7 @@ class MirroringLauncher:
         self.btn_auto.config(state=tk.DISABLED)
         
         def run():
-            # Find USB device
+            # Find USB device (exclude any device that is wireless, i.e., has IP format or port colon)
             stdout, _, _ = run_cmd([ADB_PATH, "devices"])
             usb_dev = None
             for line in stdout.splitlines():
@@ -436,7 +464,9 @@ class MirroringLauncher:
                 parts = line.split()
                 if len(parts) >= 2:
                     d_id = parts[0]
-                    if ":" not in d_id and "192.168" not in d_id:
+                    # Check if the device ID looks like an IP address or contains colon (wireless port)
+                    is_wireless = ":" in d_id or re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", d_id)
+                    if not is_wireless:
                         usb_dev = d_id
                         break
             
@@ -448,35 +478,56 @@ class MirroringLauncher:
                 self.root.after(0, err)
                 return
             
-            # Setup tcpip
+            # Setup tcpip port
             run_cmd([ADB_PATH, "-s", usb_dev, "tcpip", "5555"])
+            # Essential delay to allow Android to spin up the listener port
+            time.sleep(1.5)
             
-            # Fetch IP
-            ip_stdout, _, _ = run_cmd([ADB_PATH, "-s", usb_dev, "shell", "ip route"])
+            # Fetch real Wi-Fi IP address (ignore mobile carrier networks)
             phone_ip = None
+            
+            # Strategy 1: check ip route
+            ip_stdout, _, _ = run_cmd([ADB_PATH, "-s", usb_dev, "shell", "ip route"])
             for line in ip_stdout.splitlines():
-                if "wlan0" in line and "src" in line:
+                if "src" in line:
                     m = re.search(r"src\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
                     if m:
-                        phone_ip = m.group(1)
-                        break
+                        candidate = m.group(1)
+                        if is_private_ip(candidate):
+                            phone_ip = candidate
+                            break
             
+            # Strategy 2: check all IPv4 interfaces
             if not phone_ip:
-                # Try fallback
-                ip_stdout, _, _ = run_cmd([ADB_PATH, "-s", usb_dev, "shell", "ip -o -4 addr show wlan0"])
-                m = re.search(r"inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", ip_stdout)
-                if m:
-                    phone_ip = m.group(1)
+                ip_stdout, _, _ = run_cmd([ADB_PATH, "-s", usb_dev, "shell", "ip -4 addr show"])
+                candidates = re.findall(r"inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", ip_stdout)
+                for candidate in candidates:
+                    if is_private_ip(candidate):
+                        phone_ip = candidate
+                        break
+
+            # Strategy 3: dumpsys wifi (useful on some restricted systems)
+            if not phone_ip:
+                wifi_stdout, _, _ = run_cmd([ADB_PATH, "-s", usb_dev, "shell", "dumpsys wifi"])
+                candidates = re.findall(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", wifi_stdout)
+                for candidate in candidates:
+                    if is_private_ip(candidate):
+                        phone_ip = candidate
+                        break
             
             if not phone_ip:
                 def ip_err():
                     self.btn_auto.config(state=tk.NORMAL)
-                    messagebox.showerror("오류", "기기 Wi-Fi IP 주소를 파악할 수 없습니다.")
+                    messagebox.showerror("오류", "기기 Wi-Fi IP 주소를 파악할 수 없습니다. 폰이 와이파이에 올바르게 연결되어 있는지 확인해 주세요.")
                     self.set_status("IP 획득 실패", "red")
                 self.root.after(0, ip_err)
                 return
             
-            # Connect
+            # Disconnect existing sessions to clear dead routing locks
+            run_cmd([ADB_PATH, "disconnect", f"{phone_ip}:5555"])
+            time.sleep(0.5)
+            
+            # Connect wirelessly
             run_cmd([ADB_PATH, "connect", f"{phone_ip}:5555"])
             
             def success():
