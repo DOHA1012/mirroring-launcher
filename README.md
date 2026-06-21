@@ -10,7 +10,7 @@
 
 ## 📥 최신 버전 다운로드 (v1.0.0)
 아래 링크에서 런처 패키지 zip 파일을 무료로 다운로드하실 수 있습니다. 다운로드 후 압축을 풀어 사용하세요:
-👉 **[미러링 바로연결 Standalone Package 다운로드 (ZIP)](https://github.com/DOHA1012/mirroring-launcher/releases/download/v1.0.0/%EB%AF%B8%EB%9F%AC%EB%A7%81_%EB%B0%94%EB%A1%9C%EC%97%B0%EA%B2%B0.zip)**
+👉 **[미러링 바로연결 Standalone Package 다운로드 (ZIP)](https://github.com/DOHA1012/mirroring-launcher/releases/download/v1.0.0/mirroring_direction.zip)**
 
 ### ✨ 주요 핵심 기능
 * **비동기 고속 앱 로딩**: 기기 연결 즉시 설치된 모든 앱 목록을 한글/영어 이름으로 즉시 긁어옵니다.
@@ -72,7 +72,7 @@ This package is a universal launcher designed to wireless-mirror and launch **an
 
 ## 📥 Download Latest Version (v1.0.0)
 You can download the launcher package zip file for free from the link below. Extract and run it:
-👉 **[Download Universal Mirroring Launcher Standalone Package (ZIP)](https://github.com/DOHA1012/mirroring-launcher/releases/download/v1.0.0/%EB%AF%B8%EB%9F%AC%EB%A7%81_%EB%B0%94%EB%A1%9C%EC%97%B0%EA%B2%B0.zip)**
+👉 **[Download Universal Mirroring Launcher Standalone Package (ZIP)](https://github.com/DOHA1012/mirroring-launcher/releases/download/v1.0.0/mirroring_direction.zip)**
 
 ### ✨ Core Features
 * **Bilingual Async App Loading**: Instantly scans all installed third-party and system activities in both English and Korean.
