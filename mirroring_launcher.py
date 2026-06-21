@@ -6,9 +6,67 @@ import threading
 import json
 import time
 import ctypes
+import urllib.request
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from PIL import Image, ImageTk
+
+# ----------------------------------------------------
+# Common Android App Labels Map (Local Translation Dictionary)
+# ----------------------------------------------------
+COMMON_APP_NAMES = {
+    "com.kakao.talk": "카카오톡",
+    "com.nhn.android.nmap": "네이버 지도",
+    "com.naver.labs.translator": "파파고",
+    "com.naver.android.naverapp": "네이버",
+    "com.naver.android.music": "VIBE (바이브)",
+    "com.samsung.android.spay": "삼성 페이",
+    "com.google.android.youtube": "유튜브",
+    "com.google.android.apps.maps": "구글 지도",
+    "com.instagram.android": "인스타그램",
+    "com.facebook.katana": "페이스북",
+    "org.telegram.messenger": "텔레그램",
+    "com.tencent.tmgp.pubgmhd": "배틀그라운드 모바일",
+    "com.supercell.brawlstars": "브롤스타즈",
+    "com.supercell.clashofclans": "클래시 오브 클랜",
+    "com.netmarble.sololv": "나 혼자만 레벨업: 어라이즈",
+    "com.nexon.bluearchive": "블루 아카이브",
+    "com.nexon.maplesorce": "메이플스토리M",
+    "com.kakaogames.twinstar": "우마무스메",
+    "com.kakaogames.rom": "ROM: 리멤버 오브 마제스티",
+    "com.kakaogames.odin": "오딘: 발할라 라이징",
+    "com.kakaogames.ares": "아레스: 라이즈 오브 가디언즈",
+    "com.smilegate.megaport.stove": "STOVE",
+    "com.riotgames.legendsofruneterra": "레전드 오브 룬테라",
+    "com.riotgames.league.wildrift": "와일드 리프트",
+    "com.riotgames.league.teamfighttactics": "TFT (전략적 팀 전투)",
+    "com.miHoYo.GenshinImpact": "원신",
+    "com.HoYoverse.hkrpgoversea": "붕괴: 스타레일",
+    "com.HoYoverse.nap.open": "젠레스 존 제로",
+    "com.devsisters.ck": "쿠키런: 킹덤",
+    "com.devsisters.ca": "쿠키런: 오븐브레이크",
+    "com.wemade.nightcrows": "나이트 크로우",
+    "com.linegames.ud": "언디셈버",
+    "com.sec.android.app.camera": "카메라",
+    "com.android.settings": "설정",
+    "com.sec.android.app.gallery": "갤러리",
+    "com.sec.android.gallery3d": "갤러리",
+    "com.samsung.android.app.contacts": "연락처",
+    "com.samsung.android.messaging": "메시지",
+    "com.android.chrome": "크롬 브라우저",
+    "com.sec.android.app.clockpackage": "시계",
+    "com.samsung.android.calendar": "캘린더",
+    "com.sec.android.app.popupcalculator": "계산기",
+    "com.samsung.android.app.notes": "삼성 노트",
+    "com.sec.android.app.music": "삼성 뮤직",
+    "com.samsung.android.oneconnect": "SmartThings",
+    "com.samsung.android.voc": "삼성 멤버스",
+    "com.samsung.android.app.files": "내 파일",
+    "com.samsung.android.lool": "디바이스 케어",
+    "com.samsung.android.knox.containeragent": "보안 폴더",
+    "com.samsung.android.app.routines": "모드 및 루틴",
+}
+
 
 # Set AppUserModelID to ensure the taskbar group matches on Windows
 try:
@@ -56,6 +114,7 @@ ICON_CACHE_DIR = os.path.join(CACHE_DIR, "icons")
 os.makedirs(ICON_CACHE_DIR, exist_ok=True)
 
 CONFIG_PATH = os.path.join(BASE_PATH, "config.json")
+LABEL_CACHE_PATH = os.path.join(CACHE_DIR, "app_labels.json")
 DEFAULT_ICON_PNG = os.path.join(BASE_PATH, "launcher_icon.png")
 DEFAULT_ICON_ICO = os.path.join(BASE_PATH, "launcher_icon.ico")
 
@@ -105,6 +164,8 @@ class MirroringLauncher:
         self.devices = []
         self.all_apps = []        # Scanned apps: [{"package": "...", "label": "..."}]
         self.favorites = []       # Saved favorites: [{"package": "...", "label": "...", "nickname": "..."}]
+        self.app_labels_cache = {}  # Cache for Play Store app labels
+        self.load_app_labels_cache()
         self.selected_app = None  # Selected favorite app object
         
         # Main frames layout
@@ -297,36 +358,39 @@ class MirroringLauncher:
         
         # Load apps async
         def run_load():
-            # Get list of launcher activities
+            # Get list of launcher activities (without problematic --query-as-user)
             cmd_args = [
                 ADB_PATH, "-s", dev_id, "shell", 
-                "cmd package query-activities --query-as-user 0 -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
+                "cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.LAUNCHER"
             ]
             stdout, stderr, code = run_cmd(cmd_args)
-            apps = []
-            seen = set()
+            pkgs = set()
             
-            # Parse cmd output:
-            # activity name=package/.Class label=Label
+            # Parse cmd output for package names
             for line in stdout.splitlines():
-                match = re.search(r"name=([^/]+)/.*?label=(.+)", line)
-                if match:
-                    pkg = match.group(1).strip()
-                    lbl = match.group(2).strip()
-                    if pkg not in seen:
-                        apps.append({"package": pkg, "label": lbl})
-                        seen.add(pkg)
+                m1 = re.search(r"packageName=([^\s]+)", line)
+                if m1:
+                    pkgs.add(m1.group(1).strip())
+                else:
+                    m2 = re.search(r"name=([^/]+)/", line)
+                    if m2:
+                        pkgs.add(m2.group(1).strip())
             
+            # Fallback/Supplemental: Get user-installed third-party apps
+            stdout_pm, _, _ = run_cmd([ADB_PATH, "-s", dev_id, "shell", "pm list packages -3"])
+            for line in stdout_pm.splitlines():
+                if line.startswith("package:"):
+                    pkg = line.replace("package:", "").strip()
+                    pkgs.add(pkg)
+            
+            # Build app lists with locally resolved labels
+            apps = []
+            for pkg in sorted(list(pkgs)):
+                label = self.resolve_app_label_locally(pkg)
+                apps.append({"package": pkg, "label": label})
+                
             # Sort apps alphabetically by label
             apps.sort(key=lambda x: x["label"].lower())
-            
-            # If query-activities is not supported or returned nothing, fallback to pm list packages
-            if not apps:
-                stdout, _, _ = run_cmd([ADB_PATH, "-s", dev_id, "shell", "pm list packages -3"])
-                for line in stdout.splitlines():
-                    if line.startswith("package:"):
-                        pkg = line.replace("package:", "").strip()
-                        apps.append({"package": pkg, "label": pkg})
             
             self.root.after(0, lambda: self.finish_apps_loading(apps))
         threading.Thread(target=run_load, daemon=True).start()
@@ -593,7 +657,10 @@ class MirroringLauncher:
             # Add matching
             for app in self.all_apps:
                 pkg = app["package"]
-                lbl = app["label"]
+                # Resolve current label dynamically (helps pick up scraped labels)
+                lbl = self.resolve_app_label_locally(pkg)
+                app["label"] = lbl  # Keep local all_apps record updated
+                
                 if filter_str.lower() in lbl.lower() or filter_str.lower() in pkg.lower():
                     # Check if already added
                     suffix = ""
@@ -637,12 +704,56 @@ class MirroringLauncher:
             list_win.destroy()
             
             self.extract_app_icon(selected_dev.split()[0], pkg, lbl)
-
+ 
         btn_row = ttk.Frame(list_win, padding="10")
         btn_row.pack(fill=tk.X)
         
         ttk.Button(btn_row, text="즐겨찾기 추가", command=on_add).pack(fill=tk.X)
         tree.bind("<Double-1>", lambda e: on_add())
+        
+        # Start background async scrapings for missing items
+        self.start_async_label_scraping(tree, list_win)
+
+    def start_async_label_scraping(self, tree, list_win):
+        def scrape_worker():
+            updated_any = False
+            # Filter packages that need scraping
+            to_scrape = []
+            for app in self.all_apps:
+                pkg = app["package"]
+                if pkg not in COMMON_APP_NAMES and pkg not in self.app_labels_cache:
+                    to_scrape.append(app)
+            
+            # Scrape them one by one
+            for app in to_scrape:
+                # Stop if window is closed
+                if not list_win.winfo_exists():
+                    break
+                    
+                pkg = app["package"]
+                scraped_label = self.scrape_play_store_label(pkg)
+                if scraped_label:
+                    self.app_labels_cache[pkg] = scraped_label
+                    app["label"] = scraped_label
+                    updated_any = True
+                    
+                    # Update Treeview in main thread
+                    def update_ui(p=pkg, l=scraped_label):
+                        try:
+                            for item in tree.get_children():
+                                values = tree.item(item, "values")
+                                if values and values[1] == p:
+                                    suffix = " (등록됨)" if any(x["package"] == p for x in self.favorites) else ""
+                                    tree.set(item, "Name", l + suffix)
+                                    break
+                        except Exception:
+                            pass
+                    self.root.after(0, update_ui)
+                    
+            if updated_any:
+                self.save_app_labels_cache()
+                
+        threading.Thread(target=scrape_worker, daemon=True).start()
 
     # ----------------------------------------------------
     # High-speed asynchronous app icon extraction (unzip logic)
@@ -776,6 +887,70 @@ class MirroringLauncher:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
             print("Failed saving configuration profiles:", e)
+
+    # ----------------------------------------------------
+    # App Label Resolution & Caching helpers
+    # ----------------------------------------------------
+    def load_app_labels_cache(self):
+        if os.path.exists(LABEL_CACHE_PATH):
+            try:
+                with open(LABEL_CACHE_PATH, "r", encoding="utf-8") as f:
+                    self.app_labels_cache = json.load(f)
+            except Exception as e:
+                print("Failed loading app labels cache:", e)
+                self.app_labels_cache = {}
+        else:
+            self.app_labels_cache = {}
+
+    def save_app_labels_cache(self):
+        try:
+            with open(LABEL_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.app_labels_cache, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print("Failed saving app labels cache:", e)
+
+    def clean_package_name_to_label(self, pkg):
+        parts = pkg.split('.')
+        # Skip common prefixes/suffixes
+        meaningful_parts = [p for p in parts if p not in ('com', 'org', 'net', 'co', 'android', 'io', 'apps', 'app', 'google', 'samsung')]
+        if not meaningful_parts:
+            meaningful_parts = parts
+        
+        words = []
+        for part in meaningful_parts:
+            # Match camelCase or under_scores
+            subparts = re.findall(r'[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z][a-z0-9]|\b)', part)
+            if not subparts:
+                subparts = [part]
+            words.extend([sp.capitalize() for sp in subparts])
+            
+        return " ".join(words)
+
+    def resolve_app_label_locally(self, pkg):
+        if pkg in COMMON_APP_NAMES:
+            return COMMON_APP_NAMES[pkg]
+        if pkg in self.app_labels_cache:
+            return self.app_labels_cache[pkg]
+        return self.clean_package_name_to_label(pkg)
+
+    def scrape_play_store_label(self, pkg):
+        url = f"https://play.google.com/store/apps/details?id={pkg}&hl=ko"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+        try:
+            with urllib.request.urlopen(req, timeout=3) as response:
+                html = response.read().decode('utf-8', errors='ignore')
+                m = re.search(r'<meta property="og:title" content="([^"]+)"', html)
+                if m:
+                    title = m.group(1)
+                    # Normalize special dashes before processing
+                    clean_title = title.replace("–", "-").replace("—", "-")
+                    clean_title = clean_title.replace(" - Google Play 앱", "").replace(" - Apps on Google Play", "").strip()
+                    if " - " in clean_title:
+                        clean_title = clean_title.split(" - ")[0]
+                    return clean_title.strip()
+        except Exception:
+            pass
+        return None
 
     # ----------------------------------------------------
     # Game launching & Dynamic Win32 Icon Skinning
